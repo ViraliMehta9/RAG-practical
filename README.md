@@ -95,10 +95,15 @@ The notebook code is kept almost verbatim, with a few production-minded addition
    GOOGLE_API_KEY = "your-gemini-api-key"
    ```
 
-4. Click **Deploy**. The first start installs `requirements.txt` and builds the
-   vector index from `docs/` (about a minute).
+4. Click **Deploy**. The first start installs `requirements.txt` and loads the
+   prebuilt index committed in `index/`, so no embedding calls are needed at startup.
 
 Notes:
+- The Gemini free tier allows about 100 embedding requests per minute and counts every
+  chunk as a request. Embedding runs in batches of 20 with automatic back-off on 429
+  errors, and the index is committed to the repo so cloud restarts never re-embed.
+  After changing `docs/`, run `python -m rag_chatbot.ingest --force` locally and
+  commit the updated `index/vector_store.json`.
 - The cloud file system is temporary: files uploaded through the UI and the index
   survive only until the app restarts or redeploys. Commit documents to `docs/` to
   make them permanent.

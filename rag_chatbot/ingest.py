@@ -10,8 +10,11 @@ Run once to build the index, and again whenever the docs folder changes:
 from __future__ import annotations
 
 import argparse
+import re
 import sys
+import time
 from pathlib import Path
+from typing import Callable, TypeVar
 
 from langchain_core.vectorstores import InMemoryVectorStore
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
@@ -19,6 +22,52 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from . import config
 from .loaders import load_directory
+
+
+T = TypeVar("T")
+
+
+def is_rate_limit_error(exc: BaseException) -> bool:
+    text = str(exc)
+    return "429" in text or "RESOURCE_EXHAUSTED" in text or "quota" in text.lower()
+
+
+def _suggested_delay(exc: BaseException) -> float | None:
+    m = re.search(r"retry in ([\d.]+)\s*s", str(exc), re.IGNORECASE)
+    return float(m.group(1)) if m else None
+
+
+def with_retry(
+    fn: Callable[[], T],
+    retries: int = config.EMBED_MAX_RETRIES,
+    log: Callable[[str], None] | None = None,
+) -> T:
+    """Call ``fn``; on a Gemini 429/quota error wait and try again (bounded)."""
+    for attempt in range(1, retries + 1):
+        try:
+            return fn()
+        except Exception as exc:
+            if not is_rate_limit_error(exc) or attempt == retries:
+                raise
+            delay = max(_suggested_delay(exc) or 0.0, 5.0 * attempt)
+            if log:
+                log(f"Gemini rate limit hit; waiting {delay:.0f}s (attempt {attempt}/{retries})")
+            time.sleep(delay)
+    raise RuntimeError("unreachable")
+
+
+def embed_and_add(
+    store: InMemoryVectorStore,
+    chunks,
+    batch_size: int = config.EMBED_BATCH_SIZE,
+    log: Callable[[str], None] | None = None,
+) -> None:
+    """Add chunks to the store in small batches, retrying on rate limits."""
+    for start in range(0, len(chunks), batch_size):
+        batch = chunks[start : start + batch_size]
+        with_retry(lambda b=batch: store.add_documents(b), log=log)
+        if log:
+            log(f"  embedded {min(start + batch_size, len(chunks))}/{len(chunks)} chunks")
 
 
 def get_embeddings() -> GoogleGenerativeAIEmbeddings:
@@ -56,7 +105,7 @@ def build_index(
     embeddings = get_embeddings()
     log(f"Embedding with {config.EMBEDDING_MODEL} ...")
     store = InMemoryVectorStore(embeddings)
-    store.add_documents(chunks)
+    embed_and_add(store, chunks, log=log)
 
     index_path.parent.mkdir(parents=True, exist_ok=True)
     store.dump(str(index_path))
@@ -81,17 +130,22 @@ def add_files_to_index(
     """Incrementally load, chunk and embed ``paths`` into an existing store, then persist.
 
     Returns ``{file_name: number_of_chunks_added}``. A count of 0 means the file
-    produced no text (for example a scanned, image-only PDF).
+    produced no text (for example a scanned, image-only PDF). Files whose name is
+    already in the index are skipped so re-uploads don't create duplicate chunks.
     """
     from .loaders import load_file
 
+    known = indexed_sources(store)
     added: dict[str, int] = {}
     for path in paths:
+        if path.name in known:
+            continue
         docs = load_file(path)
         chunks = split_documents(docs) if docs else []
         if chunks:
-            store.add_documents(chunks)
+            embed_and_add(store, chunks)
         added[path.name] = len(chunks)
+        known.add(path.name)
     if any(added.values()):
         index_path.parent.mkdir(parents=True, exist_ok=True)
         store.dump(str(index_path))

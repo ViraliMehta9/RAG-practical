@@ -17,7 +17,7 @@ from langchain_core.vectorstores import InMemoryVectorStore
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from . import config
-from .ingest import load_or_build_index
+from .ingest import is_rate_limit_error, load_or_build_index, with_retry  # noqa: F401
 
 SYSTEM_PROMPT = """You are a helpful assistant that answers questions about the documents \
 provided in CONTEXT below. The knowledge base may contain several documents (for example \
@@ -133,7 +133,11 @@ class RAGChatbot:
         return rewritten or user_message
 
     def retrieve(self, query: str) -> list[tuple[Document, float]]:
-        return self.vector_store.similarity_search_with_score(query, k=self.top_k)
+        # Embedding the query is one Gemini request; retry briefly if rate limited.
+        return with_retry(
+            lambda: self.vector_store.similarity_search_with_score(query, k=self.top_k),
+            retries=3,
+        )
 
     # -- generation ----------------------------------------------------------
     def ask(self, user_message: str) -> ChatResult:

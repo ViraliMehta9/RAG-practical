@@ -28,6 +28,10 @@ MAX_OUTPUT_TOKENS = int(os.getenv("RAG_MAX_OUTPUT_TOKENS", "1024"))
 CHUNK_SIZE = int(os.getenv("RAG_CHUNK_SIZE", "800"))
 CHUNK_OVERLAP = int(os.getenv("RAG_CHUNK_OVERLAP", "120"))
 TOP_K = int(os.getenv("RAG_TOP_K", "4"))
+# Gemini's free tier allows ~100 embedding requests/minute and counts every chunk in a
+# batch as one request, so embed in small batches and back off on 429 errors.
+EMBED_BATCH_SIZE = int(os.getenv("RAG_EMBED_BATCH_SIZE", "20"))
+EMBED_MAX_RETRIES = int(os.getenv("RAG_EMBED_MAX_RETRIES", "8"))
 
 # --- Memory (Section 5) -----------------------------------------------------
 # Keep only the last N message pairs to bound prompt size on long chats.

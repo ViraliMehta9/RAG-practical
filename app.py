@@ -11,7 +11,12 @@ import streamlit as st
 
 from rag_chatbot import config
 from rag_chatbot.chatbot import RAGChatbot
-from rag_chatbot.ingest import add_files_to_index, indexed_sources, load_or_build_index
+from rag_chatbot.ingest import (
+    add_files_to_index,
+    indexed_sources,
+    is_rate_limit_error,
+    load_or_build_index,
+)
 
 st.set_page_config(page_title="Workshop RAG Chatbot", page_icon="🧠", layout="wide")
 st.title("🧠 Practical GenAI Workshop — RAG Chatbot")
@@ -143,7 +148,12 @@ if prompt := st.chat_input("Ask about your documents, e.g. 'What does temperatur
             try:
                 result = bot.ask(prompt)
             except Exception as exc:
-                st.error(f"Error talking to Gemini: {exc}")
+                if is_rate_limit_error(exc):
+                    st.warning(
+                        "Gemini's free-tier rate limit was hit. Wait a minute and ask again."
+                    )
+                else:
+                    st.error(f"Error talking to Gemini: {exc}")
                 st.stop()
         st.markdown(result.answer)
 
