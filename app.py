@@ -141,6 +141,12 @@ def save_uploads(uploads) -> list[Path]:
     return new_paths
 
 
+@st.cache_data(show_spinner=False)
+def file_bytes(path_str: str, mtime: float) -> bytes:
+    """Read a document once per (path, modification time) instead of on every rerun."""
+    return Path(path_str).read_bytes()
+
+
 def chunk_counts(bot: RAGChatbot) -> Counter:
     return Counter(rec["metadata"].get("source") for rec in bot.vector_store.store.values())
 
@@ -198,7 +204,7 @@ with st.sidebar:
         )
         st.download_button(
             "⬇ Download",
-            data=path.read_bytes(),
+            data=file_bytes(str(path), path.stat().st_mtime),
             file_name=path.name,
             mime=MIME_TYPES.get(ext, "application/octet-stream"),
             key=f"dl-{path.name}",
