@@ -20,12 +20,13 @@ from . import config
 from .ingest import load_or_build_index
 
 SYSTEM_PROMPT = """You are a helpful assistant that answers questions about the documents \
-provided in CONTEXT below. The main document is the "Practical Generative AI Workshop" \
-notebook (LangChain + Gemini): AI frameworks, LLM parameters, chatbots, memory, \
-embeddings, vector stores and RAG.
+provided in CONTEXT below. The knowledge base may contain several documents (for example \
+the "Practical Generative AI Workshop" notebook, company handbooks, brochures or PDFs). \
+Each context chunk starts with its source file name.
 
 Rules:
-- Base your answer on the CONTEXT. Quote code from the context when it helps.
+- Base your answer on the CONTEXT. Quote code or figures from the context when it helps, \
+and mention which document the answer came from.
 - You may also use facts already established earlier in this conversation \
 (for example the user's name).
 - If the answer is in neither the context nor the conversation, say: \
@@ -138,7 +139,12 @@ class RAGChatbot:
     def ask(self, user_message: str) -> ChatResult:
         query = self._standalone_question(user_message)
         sources = self.retrieve(query)
-        context = "\n\n---\n\n".join(doc.page_content for doc, _ in sources) or "(no documents matched)"
+        context = "\n\n---\n\n".join(
+            f"[Source: {doc.metadata.get('source', 'unknown')}"
+            + (f", page {doc.metadata['page']}" if doc.metadata.get("page") else "")
+            + f"]\n{doc.page_content}"
+            for doc, _ in sources
+        ) or "(no documents matched)"
 
         messages: list[BaseMessage] = [
             SystemMessage(content=SYSTEM_PROMPT.format(context=context)),

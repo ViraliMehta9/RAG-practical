@@ -63,8 +63,10 @@ similarity scores so you can see *why* the bot said what it said.
 
 ## Adding your own documents
 
-Drop `.ipynb`, `.md`, `.txt` or `.pdf` files into `docs/` and run
-`python -m rag_chatbot.ingest --force` (or click **Rebuild index** in the web UI).
+Upload them in the web UI sidebar: each file is saved to `docs/` and embedded into the
+live index immediately, so you can ask about it right away. Files copied into `docs/`
+by hand are picked up automatically the next time the app or `chat.py` starts.
+**Rebuild index from scratch** re-embeds everything (use it after deleting a file).
 
 ## How it differs from the notebook
 

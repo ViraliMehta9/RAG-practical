@@ -64,6 +64,53 @@ def build_index(
     return store
 
 
+def indexed_sources(store: InMemoryVectorStore) -> set[str]:
+    """File names (metadata['source']) that already have chunks in the store."""
+    return {
+        rec["metadata"].get("source")
+        for rec in store.store.values()
+        if rec.get("metadata", {}).get("source")
+    }
+
+
+def add_files_to_index(
+    store: InMemoryVectorStore,
+    paths: list[Path],
+    index_path: Path = config.INDEX_PATH,
+) -> dict[str, int]:
+    """Incrementally load, chunk and embed ``paths`` into an existing store, then persist.
+
+    Returns ``{file_name: number_of_chunks_added}``. A count of 0 means the file
+    produced no text (for example a scanned, image-only PDF).
+    """
+    from .loaders import load_file
+
+    added: dict[str, int] = {}
+    for path in paths:
+        docs = load_file(path)
+        chunks = split_documents(docs) if docs else []
+        if chunks:
+            store.add_documents(chunks)
+        added[path.name] = len(chunks)
+    if any(added.values()):
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        store.dump(str(index_path))
+    return added
+
+
+def sync_index(
+    store: InMemoryVectorStore,
+    docs_dir: Path = config.DOCS_DIR,
+    index_path: Path = config.INDEX_PATH,
+) -> dict[str, int]:
+    """Index any file in ``docs_dir`` that is not yet in the store."""
+    from .loaders import iter_supported_files
+
+    known = indexed_sources(store)
+    missing = [p for p in sorted(iter_supported_files(docs_dir)) if p.name not in known]
+    return add_files_to_index(store, missing, index_path) if missing else {}
+
+
 def load_index(index_path: Path = config.INDEX_PATH) -> InMemoryVectorStore:
     if not index_path.exists():
         raise FileNotFoundError(f"No index at {index_path}. Run `python -m rag_chatbot.ingest` first.")
@@ -79,7 +126,13 @@ def load_or_build_index(
     if index_path.exists() and not force:
         if verbose:
             print(f"Loading existing index from {index_path}")
-        return load_index(index_path)
+        store = load_index(index_path)
+        # Pick up any files dropped into docs/ since the index was last saved.
+        added = sync_index(store, docs_dir, index_path)
+        if verbose:
+            for name, n in added.items():
+                print(f"Indexed new file {name}: {n} chunks")
+        return store
     return build_index(docs_dir, index_path, verbose=verbose)
 
 

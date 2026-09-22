@@ -11,7 +11,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from rag_chatbot import load_chatbot
+from rag_chatbot.chatbot import load_chatbot
 
 
 def main(argv=None) -> int:

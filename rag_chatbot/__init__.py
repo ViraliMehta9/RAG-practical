@@ -1,3 +1,4 @@
-"""RAG chatbot built from the Practical Generative AI Workshop (LangChain + Gemini)."""
+"""RAG chatbot built from the Practical Generative AI Workshop (LangChain + Gemini).
 
-from .chatbot import ChatResult, RAGChatbot, load_chatbot  # noqa: F401
+Import from the submodules directly, e.g. ``from rag_chatbot.chatbot import load_chatbot``.
+"""
