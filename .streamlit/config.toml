@@ -1,5 +1,14 @@
+[client]
+# Hide the Fork / GitHub / developer toolbar for visitors.
+toolbarMode = "viewer"
+
 [server]
 maxUploadSize = 50
 
 [theme]
 base = "light"
+primaryColor = "#4F46E5"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F6FB"
+textColor = "#111827"
+font = "sans serif"

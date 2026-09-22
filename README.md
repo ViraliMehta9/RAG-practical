@@ -57,9 +57,14 @@ Or use the web UI:
 streamlit run app.py
 ```
 
-The web UI lets you paste the API key if it isn't in `.env`, upload more documents, and
-rebuild the index with one click. Every answer shows the retrieved chunks and their
-similarity scores so you can see *why* the bot said what it said.
+The web UI shows the knowledge base in the sidebar with a **Download** button per
+document, so users can read the source and ask grounded questions. Suggested questions
+get a first-time visitor started, and every answer lists its sources with a relevance
+score.
+
+Document management (upload, index new files, rebuild) lives in the sidebar **Admin**
+panel. Set an `ADMIN_PASSWORD` in `.env` or in Streamlit Cloud Secrets to lock it;
+without one the panel is open to everyone.
 
 ## Adding your own documents
 
