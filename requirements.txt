@@ -5,3 +5,4 @@ python-dotenv>=1.0
 streamlit>=1.36
 pypdf>=4.0
 fonttools>=4.50
+pillow>=10.0

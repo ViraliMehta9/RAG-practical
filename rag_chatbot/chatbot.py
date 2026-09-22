@@ -51,6 +51,18 @@ Follow-up message: {question}
 Standalone question:"""
 
 
+PHOTO_SYSTEM_PROMPT = """You are a helpful visual assistant. The user has uploaded a photo, which is \
+attached to their message, and an automatic analysis of it is given below. Answer questions about \
+the photo using what you can actually see in the image; use the analysis as a helpful reference. \
+Describe colours, objects, actions, setting, mood and people's visible expressions or body language. \
+Emotions are inferences: phrase them as "appears" or "seems". Never try to identify who a person is. \
+If something is not visible in the photo, say so instead of guessing. Be concise and use Markdown.
+
+PHOTO ANALYSIS:
+{analysis}
+"""
+
+
 def get_text(response) -> str:
     """Return just the visible text of an LLM response.
 
@@ -163,6 +175,25 @@ class RAGChatbot:
         self.history.append(HumanMessage(content=user_message))
         self.history.append(AIMessage(content=answer))
         return ChatResult(answer=answer, sources=sources, retrieval_query=query)
+
+    def ask_about_image(
+        self, user_message: str, image_bytes: bytes, mime: str, analysis_text: str
+    ) -> ChatResult:
+        """Multimodal turn: the image travels with the question so answers stay precise."""
+        from .vision import image_part
+
+        messages: list[BaseMessage] = [
+            SystemMessage(content=PHOTO_SYSTEM_PROMPT.format(analysis=analysis_text)),
+            *self._trimmed_history(),
+            HumanMessage(content=[{"type": "text", "text": user_message}, image_part(image_bytes, mime)]),
+        ]
+        answer = get_text(with_retry(lambda: self.llm.invoke(messages), retries=3))
+        # Keep history text-only so later document turns don't resend the image.
+        self.history.append(HumanMessage(content=f"[About the photo] {user_message}"))
+        self.history.append(AIMessage(content=answer))
+        return ChatResult(answer=answer, sources=[], retrieval_query=user_message)
+
+
 
 
 def load_chatbot(force_rebuild: bool = False, verbose: bool = True, **kwargs) -> RAGChatbot:

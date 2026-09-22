@@ -62,6 +62,13 @@ document, so users can read the source and ask grounded questions. Suggested que
 get a first-time visitor started, and every answer lists its sources with a relevance
 score.
 
+**Photos.** Upload a photo in the sidebar and Gemini's multimodal input produces a
+"photo card": scene, what it relates to, objects, dominant colours, actions, mood, text in
+the image, and for each person their visible expression and apparent emotion. Pick the
+photo under **Chat about** to ask follow-up questions; the image itself is sent with each
+question so answers stay precise. Photo descriptions are also searchable for the session.
+Photos never touch disk or the shared index, and people are never identified.
+
 Document management (upload, index new files, rebuild) lives in the sidebar **Admin**
 panel. Set an `ADMIN_PASSWORD` in `.env` or in Streamlit Cloud Secrets to lock it;
 without one the panel is open to everyone.

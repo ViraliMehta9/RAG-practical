@@ -149,6 +149,22 @@ def indexed_sources(store: InMemoryVectorStore) -> set[str]:
     }
 
 
+def add_documents_to_index(
+    store: InMemoryVectorStore,
+    docs,
+    index_path: Path = config.INDEX_PATH,
+    persist: bool = True,
+) -> int:
+    """Chunk, embed and add ready-made Documents (e.g. photo descriptions) to the store."""
+    chunks = split_documents(docs) if docs else []
+    if chunks:
+        embed_and_add(store, chunks)
+        if persist:
+            index_path.parent.mkdir(parents=True, exist_ok=True)
+            store.dump(str(index_path))
+    return len(chunks)
+
+
 def unindexed_files(store: InMemoryVectorStore, docs_dir: Path = config.DOCS_DIR) -> list[Path]:
     """Supported files in ``docs_dir`` that have no chunks in the store yet."""
     from .loaders import iter_supported_files

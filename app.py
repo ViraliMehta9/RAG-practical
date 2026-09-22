@@ -17,12 +17,14 @@ import streamlit as st
 from rag_chatbot import config
 from rag_chatbot.chatbot import RAGChatbot
 from rag_chatbot.ingest import (
+    add_documents_to_index,
     add_files_to_index,
     indexed_sources,
     is_rate_limit_error,
     load_or_build_index,
     unindexed_files,
 )
+from rag_chatbot.vision import analysis_document, analyze_image, describe_for_index, prepare_image
 
 APP_NAME = "GenAI Workshop Assistant"
 TAGLINE = "Ask questions about the Practical Generative AI Workshop and its companion documents."
@@ -31,6 +33,12 @@ SUGGESTED_QUESTIONS = [
     "Explain RAG in simple terms.",
     "Show me the code that builds the vector store.",
     "How many vacation days do Acme employees get?",
+]
+PHOTO_QUESTIONS = [
+    "What is happening in this photo?",
+    "What are the dominant colours?",
+    "Describe the people and their expressions.",
+    "What is this photo related to?",
 ]
 FILE_ICONS = {".ipynb": "📓", ".pdf": "📄", ".md": "📝", ".txt": "📃"}
 MIME_TYPES = {
@@ -151,6 +159,74 @@ def chunk_counts(bot: RAGChatbot) -> Counter:
     return Counter(rec["metadata"].get("source") for rec in bot.vector_store.store.values())
 
 
+def add_photo(bot: RAGChatbot, upload) -> None:
+    """Analyse an uploaded photo, store its card in the session and index its description."""
+    photos = st.session_state.setdefault("photos", {})
+    key = f"{upload.name}:{upload.size}"
+    if key in photos:
+        return
+    data, mime = prepare_image(upload.getvalue())
+    with st.spinner(f"Analysing {upload.name} ..."):
+        try:
+            analysis = analyze_image(data, mime)
+        except Exception as exc:
+            if is_rate_limit_error(exc):
+                st.warning("Gemini's rate limit was hit. Wait a minute and upload again.")
+            else:
+                st.error(f"Could not analyse the photo: {exc}")
+            return
+    description = describe_for_index(analysis, upload.name)
+    photos[key] = {"name": upload.name, "bytes": data, "mime": mime, "analysis": analysis, "text": description}
+    # Make the description searchable, but don't persist photo text into the shared index file.
+    try:
+        add_documents_to_index(bot.vector_store, [analysis_document(analysis, upload.name)], persist=False)
+    except Exception:
+        pass  # search across photos is a bonus; chatting about the photo still works
+    st.session_state.active_photo = key
+    st.session_state.pop("pending_prompt", None)
+
+
+def photo_card(photo: dict) -> None:
+    a = photo["analysis"]
+    st.image(photo["bytes"], caption=a.get("title") or photo["name"], width="stretch")
+    if a.get("summary"):
+        st.markdown(a["summary"])
+    cols = st.columns(2)
+    with cols[0]:
+        if a.get("scene"):
+            st.markdown(f"**Scene:** {a['scene']}")
+        if a.get("subject"):
+            st.markdown(f"**Related to:** {a['subject']}")
+        if a.get("mood"):
+            st.markdown(f"**Mood:** {a['mood']}")
+    with cols[1]:
+        if a.get("colors"):
+            st.markdown("**Colours:** " + ", ".join(map(str, a["colors"])))
+        if a.get("actions"):
+            st.markdown("**Actions:** " + ", ".join(map(str, a["actions"])))
+        if a.get("objects"):
+            st.markdown("**Objects:** " + ", ".join(map(str, a["objects"][:10])))
+    people = a.get("people") or []
+    if people:
+        st.markdown(f"**People ({len(people)})**")
+        for i, p in enumerate(people, start=1):
+            if isinstance(p, dict):
+                bits = [
+                    p.get("position"),
+                    p.get("apparent_age_group"),
+                    f"expression: {p['expression']}" if p.get("expression") else None,
+                    f"seems {p['apparent_emotion']}" if p.get("apparent_emotion") else None,
+                    p.get("posture_or_action"),
+                    p.get("clothing"),
+                ]
+                st.markdown(f"- Person {i}: " + " · ".join(b for b in bits if b))
+    if a.get("text_in_image"):
+        st.markdown(f"**Text in image:** {a['text_in_image']}")
+    if a.get("tags"):
+        st.markdown(" ".join(f"`{t}`" for t in a["tags"]))
+    st.caption("Descriptions and emotions are the AI's interpretation of what is visible, not facts about anyone.")
+
+
 def render_sources(result) -> str:
     lines = []
     for i, (doc, score) in enumerate(result.sources, start=1):
@@ -208,11 +284,30 @@ with st.sidebar:
             file_name=path.name,
             mime=MIME_TYPES.get(ext, "application/octet-stream"),
             key=f"dl-{path.name}",
-            use_container_width=True,
+            width="stretch",
         )
 
     st.divider()
-    if st.button("🗑 New conversation", use_container_width=True):
+    st.markdown("### 📷 Photos")
+    st.caption("Upload a photo to get a description and chat about it. Photos stay in this session only.")
+    photo_upload = st.file_uploader(
+        "Upload a photo", type=["png", "jpg", "jpeg", "webp"], key="photo-upload", label_visibility="collapsed"
+    )
+    if photo_upload is not None:
+        add_photo(bot, photo_upload)
+    photos = st.session_state.get("photos", {})
+    if photos:
+        options = ["📚 Documents"] + [f"📷 {p['name']}" for p in photos.values()]
+        keys = [None] + list(photos.keys())
+        current = st.session_state.get("active_photo")
+        idx = keys.index(current) if current in keys else 0
+        choice = st.radio("Chat about", options, index=idx, label_visibility="visible")
+        st.session_state.active_photo = keys[options.index(choice)]
+    else:
+        st.session_state.active_photo = None
+
+    st.divider()
+    if st.button("🗑 New conversation", width="stretch"):
         st.session_state.pop("messages", None)
         bot.reset()
         st.rerun()
@@ -234,10 +329,10 @@ with st.sidebar:
                 st.rerun()
             if pending:
                 st.warning(f"{len(pending)} file(s) not indexed yet.")
-                if st.button(f"Index {len(pending)} new file(s)", use_container_width=True):
+                if st.button(f"Index {len(pending)} new file(s)", width="stretch"):
                     index_files(bot, pending)
                     st.rerun()
-            if st.button("Rebuild index from scratch", use_container_width=True):
+            if st.button("Rebuild index from scratch", width="stretch"):
                 st.session_state.pop("messages", None)
                 st.session_state.pop("saved_uploads", None)
                 get_bot(force=True)
@@ -251,10 +346,14 @@ st.markdown(
     f"<div class='hero'><div class='logo'>🧠</div><div><h1>{APP_NAME}</h1><p>{TAGLINE}</p></div></div>",
     unsafe_allow_html=True,
 )
+active_key = st.session_state.get("active_photo")
+active_photo = st.session_state.get("photos", {}).get(active_key) if active_key else None
+
 st.markdown(
     f"<span class='pill ok'>● Online</span>"
     f"<span class='pill'>{len(indexed)} documents · {len(bot.vector_store.store)} chunks</span>"
-    + (f"<span class='pill warn'>{len(pending)} awaiting indexing</span>" if pending else ""),
+    + (f"<span class='pill warn'>{len(pending)} awaiting indexing</span>" if pending else "")
+    + (f"<span class='pill'>📷 Chatting about {active_photo['name']}</span>" if active_photo else ""),
     unsafe_allow_html=True,
 )
 
@@ -262,37 +361,61 @@ st.markdown(
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-if not st.session_state.messages:
+if active_photo:
+    with st.expander(f"📷 {active_photo['analysis'].get('title') or active_photo['name']}", expanded=not st.session_state.messages):
+        photo_card(active_photo)
+    if not any(m.get("photo") == active_key for m in st.session_state.messages):
+        cols = st.columns(2)
+        for i, q in enumerate(PHOTO_QUESTIONS):
+            if cols[i % 2].button(q, key=f"psugg-{i}", width="stretch"):
+                st.session_state.pending_prompt = q
+                st.rerun()
+elif not st.session_state.messages:
     st.markdown(
         "<div class='welcome'><h3>👋 Hello! How can I help?</h3>"
         "<p>I answer using only the documents in the knowledge base and tell you which one I used. "
-        "Try one of these to get started:</p></div>",
+        "You can also upload a photo in the sidebar and ask me about it. Try one of these to get started:</p></div>",
         unsafe_allow_html=True,
     )
     cols = st.columns(2)
     for i, q in enumerate(SUGGESTED_QUESTIONS):
-        if cols[i % 2].button(q, key=f"sugg-{i}", use_container_width=True):
+        if cols[i % 2].button(q, key=f"sugg-{i}", width="stretch"):
             st.session_state.pending_prompt = q
             st.rerun()
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"], avatar="🧑‍💻" if msg["role"] == "user" else "🧠"):
+        if msg.get("photo_name") and msg["role"] == "user":
+            st.caption(f"📷 about {msg['photo_name']}")
         st.markdown(msg["content"])
         if msg.get("sources"):
             with st.expander(f"Sources ({msg['n_sources']})"):
                 st.markdown(msg["sources"], unsafe_allow_html=True)
 
-prompt = st.chat_input("Ask a question about the documents...") or st.session_state.pop("pending_prompt", None)
+placeholder = (
+    f"Ask about {active_photo['name']}..." if active_photo else "Ask a question about the documents..."
+)
+prompt = st.chat_input(placeholder) or st.session_state.pop("pending_prompt", None)
 
 if prompt:
-    st.session_state.messages.append({"role": "user", "content": prompt})
+    user_entry = {"role": "user", "content": prompt}
+    if active_photo:
+        user_entry.update(photo=active_key, photo_name=active_photo["name"])
+    st.session_state.messages.append(user_entry)
     with st.chat_message("user", avatar="🧑‍💻"):
+        if active_photo:
+            st.caption(f"📷 about {active_photo['name']}")
         st.markdown(prompt)
 
     with st.chat_message("assistant", avatar="🧠"):
-        with st.spinner("Searching the documents..."):
+        with st.spinner("Looking at the photo..." if active_photo else "Searching the documents..."):
             try:
-                result = bot.ask(prompt)
+                if active_photo:
+                    result = bot.ask_about_image(
+                        prompt, active_photo["bytes"], active_photo["mime"], active_photo["text"]
+                    )
+                else:
+                    result = bot.ask(prompt)
             except Exception as exc:
                 if is_rate_limit_error(exc):
                     st.warning("Gemini's rate limit was hit. Please wait a minute and ask again.")
@@ -306,6 +429,12 @@ if prompt:
                 st.markdown(source_html, unsafe_allow_html=True)
 
     st.session_state.messages.append(
-        {"role": "assistant", "content": result.answer, "sources": source_html, "n_sources": len(result.sources)}
+        {
+            "role": "assistant",
+            "content": result.answer,
+            "sources": source_html,
+            "n_sources": len(result.sources),
+            "photo": active_key,
+        }
     )
     st.rerun()
