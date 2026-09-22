@@ -23,6 +23,14 @@ st.caption(
 docs_dir: Path = config.DOCS_DIR
 docs_dir.mkdir(parents=True, exist_ok=True)
 
+# On Streamlit Community Cloud the key lives in the app's Secrets, not in .env.
+if not os.getenv("GOOGLE_API_KEY"):
+    try:
+        if "GOOGLE_API_KEY" in st.secrets:
+            os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
+    except Exception:
+        pass  # no secrets file configured locally; fall back to the sidebar input
+
 
 # --- Load / build the chatbot once per session ------------------------------
 def get_bot(force: bool = False) -> RAGChatbot:

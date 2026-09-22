@@ -82,6 +82,30 @@ The notebook code is kept almost verbatim, with a few production-minded addition
   standalone question using the history, so retrieval still finds the right chunk.
 - **Source citations** with similarity scores in both UIs.
 
+## Deploy to a public URL (Streamlit Community Cloud)
+
+1. Go to https://share.streamlit.io and sign in with the GitHub account that owns
+   this repo.
+2. **Create app → Deploy a public app from GitHub**. Repository
+   `ViraliMehta9/RAG-practical`, branch `main`, main file `app.py`. Pick a custom
+   subdomain, e.g. `rag-practical` → `https://rag-practical.streamlit.app`.
+3. Open **Advanced settings → Secrets** and paste:
+
+   ```toml
+   GOOGLE_API_KEY = "your-gemini-api-key"
+   ```
+
+4. Click **Deploy**. The first start installs `requirements.txt` and builds the
+   vector index from `docs/` (about a minute).
+
+Notes:
+- The cloud file system is temporary: files uploaded through the UI and the index
+  survive only until the app restarts or redeploys. Commit documents to `docs/` to
+  make them permanent.
+- Anyone with the URL can chat and spends your Gemini quota. In the app settings
+  (**Sharing**) you can restrict viewers to specific email addresses.
+- Every push to `main` redeploys automatically.
+
 ## Troubleshooting
 
 - `GOOGLE_API_KEY is not set` – create `.env` from `.env.example` or export the variable.
