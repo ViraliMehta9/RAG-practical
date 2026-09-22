@@ -16,6 +16,7 @@ from rag_chatbot.ingest import (
     indexed_sources,
     is_rate_limit_error,
     load_or_build_index,
+    sync_index,
 )
 
 st.set_page_config(page_title="Workshop RAG Chatbot", page_icon="🧠", layout="wide")
@@ -40,9 +41,25 @@ if not os.getenv("GOOGLE_API_KEY"):
 # --- Load / build the chatbot once per session ------------------------------
 def get_bot(force: bool = False) -> RAGChatbot:
     if force or "bot" not in st.session_state:
+        # Step 1: load the saved index (fast, no API calls). Build only if it is missing.
         with st.spinner("Building vector index..." if force else "Loading vector index..."):
-            store = load_or_build_index(force=force, verbose=False)
+            store = load_or_build_index(force=force, verbose=False, sync=False)
         st.session_state.bot = RAGChatbot(store)
+        # Step 2: embed any files in docs/ that are not indexed yet. This calls Gemini,
+        # so it gets its own spinner and must never block the app if it fails.
+        if not force:
+            try:
+                with st.spinner("Indexing new documents..."):
+                    added = sync_index(store)
+            except Exception as exc:
+                st.warning(
+                    "Some documents could not be indexed right now"
+                    + (" (Gemini rate limit). " if is_rate_limit_error(exc) else f": {exc}. ")
+                    + "The saved index is loaded; click 'Rebuild index from scratch' later."
+                )
+            else:
+                for name, n in added.items():
+                    st.toast(f"Indexed {name} ({n} chunks)")
     return st.session_state.bot
 
 

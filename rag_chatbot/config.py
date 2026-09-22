@@ -31,7 +31,14 @@ TOP_K = int(os.getenv("RAG_TOP_K", "4"))
 # Gemini's free tier allows ~100 embedding requests/minute and counts every chunk in a
 # batch as one request, so embed in small batches and back off on 429 errors.
 EMBED_BATCH_SIZE = int(os.getenv("RAG_EMBED_BATCH_SIZE", "20"))
-EMBED_MAX_RETRIES = int(os.getenv("RAG_EMBED_MAX_RETRIES", "8"))
+EMBED_MAX_RETRIES = int(os.getenv("RAG_EMBED_MAX_RETRIES", "6"))
+EMBED_MAX_DELAY = float(os.getenv("RAG_EMBED_MAX_DELAY", "30"))  # never sleep longer than this
+
+# --- Network -----------------------------------------------------------------
+# REST avoids gRPC stalls seen in threaded hosts such as Streamlit Cloud; a timeout
+# guarantees a call fails instead of hanging forever.
+TRANSPORT = os.getenv("RAG_TRANSPORT", "rest")
+REQUEST_TIMEOUT = float(os.getenv("RAG_REQUEST_TIMEOUT", "60"))
 
 # --- Memory (Section 5) -----------------------------------------------------
 # Keep only the last N message pairs to bound prompt size on long chats.

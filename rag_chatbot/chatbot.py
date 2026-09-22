@@ -103,6 +103,9 @@ class RAGChatbot:
             model=config.CHAT_MODEL,
             temperature=config.TEMPERATURE,
             max_output_tokens=config.MAX_OUTPUT_TOKENS,
+            transport=config.TRANSPORT,
+            timeout=config.REQUEST_TIMEOUT,
+            max_retries=2,
         )
         self.top_k = top_k
         self.max_history_turns = max_history_turns

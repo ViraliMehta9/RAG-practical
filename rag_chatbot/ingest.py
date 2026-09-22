@@ -42,14 +42,29 @@ def with_retry(
     retries: int = config.EMBED_MAX_RETRIES,
     log: Callable[[str], None] | None = None,
 ) -> T:
-    """Call ``fn``; on a Gemini 429/quota error wait and try again (bounded)."""
+    """Call ``fn`` with a hard timeout; on a Gemini 429/quota error wait and retry (bounded).
+
+    The embeddings client does not honour a per-request timeout, so the call runs in a
+    worker thread and we stop waiting after ``config.REQUEST_TIMEOUT`` seconds. That
+    turns a hung network call into an error the UI can show instead of an endless spinner.
+    """
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+
     for attempt in range(1, retries + 1):
         try:
-            return fn()
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                try:
+                    return pool.submit(fn).result(timeout=config.REQUEST_TIMEOUT)
+                except FutureTimeout:
+                    pool.shutdown(wait=False, cancel_futures=True)
+                    raise TimeoutError(
+                        f"Gemini request did not respond within {config.REQUEST_TIMEOUT:.0f}s"
+                    )
         except Exception as exc:
             if not is_rate_limit_error(exc) or attempt == retries:
                 raise
-            delay = max(_suggested_delay(exc) or 0.0, 5.0 * attempt)
+            # Google may suggest waiting hours for a daily quota; cap it so we fail fast.
+            delay = min(max(_suggested_delay(exc) or 0.0, 5.0 * attempt), config.EMBED_MAX_DELAY)
             if log:
                 log(f"Gemini rate limit hit; waiting {delay:.0f}s (attempt {attempt}/{retries})")
             time.sleep(delay)
@@ -72,7 +87,11 @@ def embed_and_add(
 
 def get_embeddings() -> GoogleGenerativeAIEmbeddings:
     config.require_api_key()
-    return GoogleGenerativeAIEmbeddings(model=config.EMBEDDING_MODEL)
+    return GoogleGenerativeAIEmbeddings(
+        model=config.EMBEDDING_MODEL,
+        transport=config.TRANSPORT,
+        request_options={"timeout": config.REQUEST_TIMEOUT},
+    )
 
 
 def split_documents(docs):
@@ -176,16 +195,27 @@ def load_or_build_index(
     index_path: Path = config.INDEX_PATH,
     force: bool = False,
     verbose: bool = True,
+    sync: bool = True,
 ) -> InMemoryVectorStore:
+    """Load the saved index (building it if absent).
+
+    With ``sync=True`` any file in ``docs_dir`` missing from the index is embedded
+    too; a rate-limit failure there is reported but does not prevent the already
+    loaded index from being returned.
+    """
     if index_path.exists() and not force:
         if verbose:
             print(f"Loading existing index from {index_path}")
         store = load_index(index_path)
-        # Pick up any files dropped into docs/ since the index was last saved.
-        added = sync_index(store, docs_dir, index_path)
-        if verbose:
-            for name, n in added.items():
-                print(f"Indexed new file {name}: {n} chunks")
+        if sync:
+            try:
+                added = sync_index(store, docs_dir, index_path)
+            except Exception as exc:
+                print(f"Warning: could not index new files ({exc}); using saved index.", file=sys.stderr)
+            else:
+                if verbose:
+                    for name, n in added.items():
+                        print(f"Indexed new file {name}: {n} chunks")
         return store
     return build_index(docs_dir, index_path, verbose=verbose)
 
