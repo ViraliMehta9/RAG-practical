@@ -16,7 +16,7 @@ from rag_chatbot.ingest import (
     indexed_sources,
     is_rate_limit_error,
     load_or_build_index,
-    sync_index,
+    unindexed_files,
 )
 
 st.set_page_config(page_title="Workshop RAG Chatbot", page_icon="🧠", layout="wide")
@@ -38,52 +38,36 @@ if not os.getenv("GOOGLE_API_KEY"):
         pass  # no secrets file configured locally; fall back to the sidebar input
 
 
-# --- Load / build the chatbot once per session ------------------------------
+# --- Helpers -----------------------------------------------------------------
 def get_bot(force: bool = False) -> RAGChatbot:
+    """Load the saved index (fast, no API calls). Embedding only happens on demand."""
     if force or "bot" not in st.session_state:
-        # Step 1: load the saved index (fast, no API calls). Build only if it is missing.
         with st.spinner("Building vector index..." if force else "Loading vector index..."):
             store = load_or_build_index(force=force, verbose=False, sync=False)
         st.session_state.bot = RAGChatbot(store)
-        # Step 2: embed any files in docs/ that are not indexed yet. This calls Gemini,
-        # so it gets its own spinner and must never block the app if it fails.
-        if not force:
-            try:
-                with st.spinner("Indexing new documents..."):
-                    added = sync_index(store)
-            except Exception as exc:
-                st.warning(
-                    "Some documents could not be indexed right now"
-                    + (" (Gemini rate limit). " if is_rate_limit_error(exc) else f": {exc}. ")
-                    + "The saved index is loaded; click 'Rebuild index from scratch' later."
-                )
-            else:
-                for name, n in added.items():
-                    st.toast(f"Indexed {name} ({n} chunks)")
     return st.session_state.bot
 
 
-def ingest_uploads(bot: RAGChatbot, uploads) -> None:
-    """Save uploaded files to docs/ and add them to the live index immediately."""
-    already_done = st.session_state.setdefault("ingested_uploads", set())
-    new_paths = []
-    for up in uploads:
-        key = (up.name, up.size)
-        if key in already_done:
-            continue
-        path = docs_dir / up.name
-        path.write_bytes(up.getbuffer())
-        new_paths.append(path)
-        already_done.add(key)
-    if not new_paths:
+def index_files(bot: RAGChatbot, paths: list[Path]) -> None:
+    """Embed ``paths`` into the live index with a progress bar and friendly errors."""
+    if not paths:
         return
+    names = ", ".join(p.name for p in paths)
+    bar = st.progress(0.0, text=f"Preparing {names} ...")
 
-    with st.spinner(f"Indexing {len(new_paths)} new file(s)..."):
-        try:
-            added = add_files_to_index(bot.vector_store, new_paths)
-        except Exception as exc:
-            st.error(f"Could not index upload: {exc}")
-            return
+    def on_progress(done: int, total: int) -> None:
+        bar.progress(done / total, text=f"Embedding chunks {done}/{total} (free tier: ~100/min)")
+
+    try:
+        added = add_files_to_index(bot.vector_store, paths, progress=on_progress)
+    except Exception as exc:
+        bar.empty()
+        if is_rate_limit_error(exc):
+            st.warning("Gemini's free-tier rate limit was hit. Wait a minute and click 'Index new files' again.")
+        else:
+            st.error(f"Could not index: {exc}")
+        return
+    bar.empty()
     for name, n in added.items():
         if n:
             st.success(f"Indexed `{name}` ({n} chunks). You can ask about it now.")
@@ -94,7 +78,22 @@ def ingest_uploads(bot: RAGChatbot, uploads) -> None:
             )
 
 
-# --- Sidebar: API key, documents, index management --------------------------
+def save_uploads(uploads) -> list[Path]:
+    """Write uploaded files to docs/ once per session; return the newly saved paths."""
+    seen = st.session_state.setdefault("saved_uploads", set())
+    new_paths = []
+    for up in uploads:
+        key = (up.name, up.size)
+        if key in seen:
+            continue
+        path = docs_dir / up.name
+        path.write_bytes(up.getbuffer())
+        new_paths.append(path)
+        seen.add(key)
+    return new_paths
+
+
+# --- Sidebar: API key ---------------------------------------------------------
 with st.sidebar:
     st.header("Setup")
     if not os.getenv("GOOGLE_API_KEY"):
@@ -103,14 +102,12 @@ with st.sidebar:
             os.environ["GOOGLE_API_KEY"] = key
     else:
         st.success("Gemini API key loaded")
+    rebuild = st.button("Rebuild index from scratch", use_container_width=True)
+    clear = st.button("Clear conversation", use_container_width=True)
 
 if not os.getenv("GOOGLE_API_KEY"):
     st.warning("Enter your Gemini API key in the sidebar to start.")
     st.stop()
-
-with st.sidebar:
-    rebuild = st.button("Rebuild index from scratch", use_container_width=True)
-    clear = st.button("Clear conversation", use_container_width=True)
 
 if clear:
     st.session_state.pop("messages", None)
@@ -125,16 +122,22 @@ except Exception as exc:
 
 if rebuild:
     st.session_state.pop("messages", None)
-    st.session_state.pop("ingested_uploads", None)
+    st.session_state.pop("saved_uploads", None)
     st.toast("Index rebuilt from all files in docs/")
 
+# --- Sidebar: documents -------------------------------------------------------
 with st.sidebar:
     st.header("Documents")
-    uploads = st.file_uploader(
-        "Add documents", type=["ipynb", "md", "txt", "pdf"], accept_multiple_files=True
-    )
+    uploads = st.file_uploader("Add documents", type=["ipynb", "md", "txt", "pdf"], accept_multiple_files=True)
     if uploads:
-        ingest_uploads(bot, uploads)
+        index_files(bot, save_uploads(uploads))
+
+    pending = unindexed_files(bot.vector_store, docs_dir)
+    if pending:
+        st.warning(f"{len(pending)} file(s) in docs/ are not indexed yet.")
+        if st.button(f"Index {len(pending)} new file(s)", use_container_width=True):
+            index_files(bot, pending)
+            pending = unindexed_files(bot.vector_store, docs_dir)
 
     indexed = indexed_sources(bot.vector_store)
     on_disk = sorted(p.name for p in docs_dir.iterdir() if p.suffix.lower() in config.SUPPORTED_EXTENSIONS)
@@ -142,7 +145,6 @@ with st.sidebar:
     for name in on_disk:
         mark = "✅" if name in indexed else "⚠️ not indexed"
         st.markdown(f"- `{name}` {mark}")
-
 
 # --- Chat transcript ---------------------------------------------------------
 if "messages" not in st.session_state:
@@ -166,9 +168,7 @@ if prompt := st.chat_input("Ask about your documents, e.g. 'What does temperatur
                 result = bot.ask(prompt)
             except Exception as exc:
                 if is_rate_limit_error(exc):
-                    st.warning(
-                        "Gemini's free-tier rate limit was hit. Wait a minute and ask again."
-                    )
+                    st.warning("Gemini's free-tier rate limit was hit. Wait a minute and ask again.")
                 else:
                     st.error(f"Error talking to Gemini: {exc}")
                 st.stop()

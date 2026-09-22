@@ -71,18 +71,26 @@ def with_retry(
     raise RuntimeError("unreachable")
 
 
+Progress = Callable[[int, int], None]  # (chunks_done, chunks_total)
+
+
 def embed_and_add(
     store: InMemoryVectorStore,
     chunks,
     batch_size: int = config.EMBED_BATCH_SIZE,
     log: Callable[[str], None] | None = None,
+    progress: Progress | None = None,
 ) -> None:
     """Add chunks to the store in small batches, retrying on rate limits."""
-    for start in range(0, len(chunks), batch_size):
+    total = len(chunks)
+    for start in range(0, total, batch_size):
         batch = chunks[start : start + batch_size]
         with_retry(lambda b=batch: store.add_documents(b), log=log)
+        done = min(start + batch_size, total)
         if log:
-            log(f"  embedded {min(start + batch_size, len(chunks))}/{len(chunks)} chunks")
+            log(f"  embedded {done}/{total} chunks")
+        if progress:
+            progress(done, total)
 
 
 def get_embeddings() -> GoogleGenerativeAIEmbeddings:
@@ -141,10 +149,19 @@ def indexed_sources(store: InMemoryVectorStore) -> set[str]:
     }
 
 
+def unindexed_files(store: InMemoryVectorStore, docs_dir: Path = config.DOCS_DIR) -> list[Path]:
+    """Supported files in ``docs_dir`` that have no chunks in the store yet."""
+    from .loaders import iter_supported_files
+
+    known = indexed_sources(store)
+    return [p for p in sorted(iter_supported_files(docs_dir)) if p.name not in known]
+
+
 def add_files_to_index(
     store: InMemoryVectorStore,
     paths: list[Path],
     index_path: Path = config.INDEX_PATH,
+    progress: Progress | None = None,
 ) -> dict[str, int]:
     """Incrementally load, chunk and embed ``paths`` into an existing store, then persist.
 
@@ -162,7 +179,7 @@ def add_files_to_index(
         docs = load_file(path)
         chunks = split_documents(docs) if docs else []
         if chunks:
-            embed_and_add(store, chunks)
+            embed_and_add(store, chunks, progress=progress)
         added[path.name] = len(chunks)
         known.add(path.name)
     if any(added.values()):
@@ -177,10 +194,7 @@ def sync_index(
     index_path: Path = config.INDEX_PATH,
 ) -> dict[str, int]:
     """Index any file in ``docs_dir`` that is not yet in the store."""
-    from .loaders import iter_supported_files
-
-    known = indexed_sources(store)
-    missing = [p for p in sorted(iter_supported_files(docs_dir)) if p.name not in known]
+    missing = unindexed_files(store, docs_dir)
     return add_files_to_index(store, missing, index_path) if missing else {}
 
 
